@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "stock-treemap",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-10-19",
+  "assets": {
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // Static files never invoke the Worker; only the API does.
+    "run_worker_first": ["/api/*"]
+  },
+  // Workers Caching: repeat API requests are served from Cloudflare's tiered
+  // cache without running the Worker; concurrent misses collapse into one run.
+  "cache": { "enabled": true },
+  // Omit `id` and `wrangler deploy` provisions the namespace on first deploy.
+  "kv_namespaces": [{ "binding": "STORE" }],
+  "observability": { "enabled": true }
+}
