@@ -24,4 +24,18 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
-      - run: pnpm build
+      # Workers build and the self-hosted server bundle.
+      - run: pnpm build:server
+
+  # The self-hosted image only ships on release; build it here so Dockerfile breakage shows up first.
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

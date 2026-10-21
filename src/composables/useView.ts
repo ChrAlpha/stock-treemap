@@ -1,28 +1,37 @@
 import type { Convention, Palette } from '../lib/scale'
-import type { SizeBy } from '../lib/treemap'
-import type { Period, Universe } from '~shared/snapshot'
+import type { Focus, SizeBy } from '../lib/treemap'
+import type { MarketId } from '~shared/markets'
+import type { Period } from '~shared/snapshot'
 import { useLocalStorage } from '@vueuse/core'
 import { reactive, watch } from 'vue'
-import { PERIODS, UNIVERSES } from '~shared/snapshot'
+import { isMarketId, MARKETS } from '~shared/markets'
+import { PERIODS } from '~shared/snapshot'
 
 // View state lives in the URL so a map can be shared or bookmarked;
 // display preferences live in localStorage.
 
 export interface View {
-  universe: Universe
+  market: MarketId
+  universe: string
   period: Period
   sizeBy: SizeBy
-  focus: string | null
+  focus: Focus
 }
 
-const DEFAULTS: View = { universe: 'sp500', period: 'd1', sizeBy: 'marketCap', focus: null }
+const DEFAULTS = { period: 'd1', sizeBy: 'marketCap' } as const
 
-function readUrl(): View {
+export const defaultUniverse = (m: MarketId) => MARKETS[m].universes[0]!.id
+
+function readUrl(lastMarket: MarketId): View {
   const q = new URLSearchParams(location.search)
   const pick = <T extends string>(v: string | null, allowed: readonly T[], fallback: T) =>
     (allowed as readonly string[]).includes(v ?? '') ? v as T : fallback
+  // A shared link always names its market; a bare visit opens the last one viewed.
+  const m = q.get('m')
+  const market = isMarketId(m) ? m : lastMarket
   return {
-    universe: pick(q.get('u'), UNIVERSES, DEFAULTS.universe),
+    market,
+    universe: pick(q.get('u'), MARKETS[market].universes.map(u => u.id), defaultUniverse(market)),
     period: pick(q.get('p'), PERIODS, DEFAULTS.period),
     sizeBy: pick(q.get('size'), ['marketCap', 'valueTraded'] as const, DEFAULTS.sizeBy),
     focus: q.get('f') || null,
@@ -30,11 +39,15 @@ function readUrl(): View {
 }
 
 export function useView() {
-  const view = reactive<View>(readUrl())
+  const last = useLocalStorage<string>('bantu:market', 'us')
+  const view = reactive<View>(readUrl(isMarketId(last.value) ? last.value : 'us'))
 
   watch(view, (v) => {
+    last.value = v.market
     const q = new URLSearchParams()
-    if (v.universe !== DEFAULTS.universe)
+    // Always written, so a shared link doesn't fall back to the recipient's last market.
+    q.set('m', v.market)
+    if (v.universe !== defaultUniverse(v.market))
       q.set('u', v.universe)
     if (v.period !== DEFAULTS.period)
       q.set('p', v.period)
@@ -42,9 +55,8 @@ export function useView() {
       q.set('size', v.sizeBy)
     if (v.focus)
       q.set('f', v.focus)
-    const search = q.toString()
-    history.replaceState(null, '', search ? `?${search}` : location.pathname)
-  })
+    history.replaceState(null, '', `?${q}`)
+  }, { immediate: true })
 
   return view
 }

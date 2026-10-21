@@ -1,0 +1,15 @@
+# docker compose up -d → http://127.0.0.1:3000
+# Bound to localhost; how it reaches the internet (reverse proxy, tunnel,
+# port forward) is up to you.
+services:
+  stock-treemap:
+    build: .
+    image: stock-treemap
+    ports:
+      - 127.0.0.1:3000:3000
+    volumes:
+      - data:/data
+    restart: unless-stopped
+
+volumes:
+  data:

@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import type { Group, Leaf, MapLayout, Rect, SizeBy } from '../lib/treemap'
+import type { Focus, Group, Leaf, MapLayout, Rect, SizeBy } from '../lib/treemap'
 import type { Scale } from '../lib/scale'
+import type { MarketSpec } from '~shared/markets'
 import type { Period, Stock } from '~shared/snapshot'
 import { useResizeObserver } from '@vueuse/core'
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { pct } from '../lib/format'
-import { buildTree, layoutMap } from '../lib/treemap'
-import { industryName, sectorName } from '~shared/taxonomy'
+import { stockLabel, stockSubLabel } from '../lib/names'
+import { industryName, sectorName } from '../lib/taxonomy'
+import { buildTree, layoutMap, parentFocus } from '../lib/treemap'
 
 export interface HoverInfo {
   stock: Stock
@@ -17,11 +19,12 @@ export interface HoverInfo {
 }
 
 const props = defineProps<{
+  market: MarketSpec
   stocks: Stock[]
   period: Period
   sizeBy: SizeBy
   scale: Scale
-  focus: string | null
+  focus: Focus
   /** When set, tiles failing the predicate are dimmed. */
   highlight: ((s: Stock) => boolean) | null
   /** Symbol to ring (search result). */
@@ -30,7 +33,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  focus: [id: string | null]
+  focus: [id: Focus]
   hover: [info: HoverInfo | null]
 }>()
 
@@ -112,13 +115,13 @@ function affine(from: Rect, to: Rect) {
   })
 }
 
-let prevFocus: string | null = null
+let prevFocus: Focus = null
 let prevGroupRects = new Map<string, Rect>()
 
 watch(layout, (next) => {
   const now = performance.now()
   // Freeze whatever is mid-flight as the new starting point.
-  const current = snapshotShown()
+  const current = new Map(shown)
   const full: Rect = { x0: 0, y0: 0, x1: width.value, y1: height.value }
 
   let zoom: Transition['zoom'] = null
@@ -173,10 +176,6 @@ watch([() => props.scale, () => props.highlight], () => {
   schedule()
 })
 watch(() => props.marked, () => schedule())
-
-function snapshotShown() {
-  return new Map(shown)
-}
 
 function schedule() {
   if (!frame)
@@ -250,7 +249,7 @@ function drawLabel(c: CanvasRenderingContext2D, stock: Stock, r: Rect, value: nu
   if (aw < 12 || ah < 7)
     return
 
-  const ticker = stock.symbol
+  const ticker = stockLabel(stock, props.market)
   // Bigger tiles get bigger type, but sub-linearly so mega-caps don't shout.
   const cap = Math.min(9 + Math.sqrt(w * h) * 0.085, 44)
   const twoLine = ah / 1.78 >= 8.5
@@ -288,7 +287,7 @@ function drawLabel(c: CanvasRenderingContext2D, stock: Stock, r: Rect, value: nu
   if (showName) {
     setFont(c, 450, nameSize, 100)
     c.fillStyle = inkSoft
-    c.fillText(ellipsize(c, shortName(stock.name), aw), cx, y + nameSize * 0.35)
+    c.fillText(ellipsize(c, stockSubLabel(stock, props.market), aw), cx, y + nameSize * 0.35)
     y += nameSize * 1.5
   }
   if (showChange) {
@@ -296,10 +295,6 @@ function drawLabel(c: CanvasRenderingContext2D, stock: Stock, r: Rect, value: nu
     c.fillStyle = inkSoft
     c.fillText(changeText, cx, y + changeSize * 0.14)
   }
-}
-
-function shortName(name: string) {
-  return name.replace(/,?\s+(Inc\.?|Incorporated|Corporation|Corp\.?|Company|Co\.|Ltd\.?|Limited|plc|PLC|N\.V\.|S\.A\.|SE|AG|Holdings?|Group)\s*$/g, '').replace(/,?\s+(Inc\.?|Corporation|Corp\.?|Ltd\.?)\s*$/g, '')
 }
 
 function drawHeader(c: CanvasRenderingContext2D, g: Group, r: Rect, alpha: number) {
@@ -551,7 +546,7 @@ function onContext(e: MouseEvent) {
   if (!props.focus)
     return
   e.preventDefault()
-  emit('focus', props.focus.startsWith('i:') ? `s:${props.focus.slice(2).split('/')[0]}` : null)
+  emit('focus', parentFocus(props.focus))
 }
 
 onMounted(async () => {

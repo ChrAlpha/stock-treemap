@@ -1,35 +1,40 @@
 <script setup lang="ts">
 import type { Scale } from '../lib/scale'
-import type { IndexQuote, Period, Universe } from '~shared/snapshot'
+import type { MarketSpec } from '~shared/markets'
+import type { IndexQuote, Period } from '~shared/snapshot'
 import { computed } from 'vue'
 import { count, pct, price } from '../lib/format'
-import { UNIVERSE_INDEX, UNIVERSE_LABEL } from '../lib/labels'
-import { UNIVERSES } from '~shared/snapshot'
 
 const props = defineProps<{
+  market: MarketSpec
   indices: IndexQuote[]
   period: Period
   scale: Scale
   /** Cap-weighted change per universe for the period, from constituents. */
-  weighted: Record<Universe, number | null>
-  counts: Record<Universe, number>
+  weighted: Record<string, number | null>
+  counts: Record<string, number>
 }>()
 
-const model = defineModel<Universe>({ required: true })
+const model = defineModel<string>({ required: true })
 
-const items = computed(() => UNIVERSES.map((u) => {
-  const quote = props.indices.find(q => q.symbol === UNIVERSE_INDEX[u])
+const quote = (symbol?: string) => symbol ? props.indices.find(q => q.symbol === symbol) : undefined
+
+const items = computed(() => props.market.universes.map((u) => {
+  const q = quote(u.index)
   // Indices have no pre/post figure; fall back to constituents, then to the day.
-  const change = quote?.change[props.period] ?? props.weighted[u] ?? quote?.change.d1 ?? null
+  const change = q?.change[props.period] ?? props.weighted[u.id] ?? q?.change.d1 ?? null
   return {
-    id: u,
-    label: UNIVERSE_LABEL[u],
-    value: quote ? price(quote.price) : `${count(props.counts[u])} 只`,
+    id: u.id,
+    label: u.label,
+    value: q ? price(q.price) : `${count(props.counts[u.id] ?? 0)} 只`,
     change,
   }
 }))
 
-const vix = computed(() => props.indices.find(q => q.symbol === 'VIX'))
+const extras = computed(() => props.market.extras.flatMap((x) => {
+  const q = quote(x.symbol)
+  return q ? [{ ...x, price: q.price, change: q.change.d1 ?? null }] : []
+}))
 </script>
 
 <template>
@@ -52,11 +57,17 @@ const vix = computed(() => props.indices.find(q => q.symbol === 'VIX'))
         :class="model === item.id ? 'scale-x-100' : 'scale-x-0'"
       />
     </button>
-    <div v-if="vix" class="ml-2 hidden shrink-0 flex-col justify-center border-l border-rule pl-4 pr-1 lg:flex" title="CBOE 波动率指数">
-      <span class="text-[12px] leading-4 text-ink-3">VIX 恐慌指数</span>
-      <span class="tnum mt-0.5 flex items-baseline gap-2 text-[13px] leading-4">
-        <span class="font-500">{{ vix.price.toFixed(2) }}</span>
-        <span class="text-ink-2">{{ pct(vix.change.d1) }}</span>
+    <div
+      v-for="(x, i) in extras"
+      :key="x.symbol"
+      class="hidden shrink-0 flex-col justify-center pl-4 pr-1 lg:flex"
+      :class="i === 0 ? 'ml-2 border-l border-rule' : ''"
+      :title="x.title"
+    >
+      <span class="text-[12px] leading-4 text-ink-3">{{ x.label }}</span>
+      <span class="tnum mt-0.5 flex items-baseline gap-2 whitespace-nowrap text-[13px] leading-4">
+        <span class="font-500">{{ price(x.price) }}</span>
+        <span :class="x.neutral ? 'text-ink-2' : 'font-500'" :style="x.neutral ? undefined : { color: scale.ink(x.change) }">{{ pct(x.change) }}</span>
       </span>
     </div>
   </nav>

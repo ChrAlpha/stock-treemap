@@ -46,6 +46,26 @@ export type Focus = string | null
 export const sectorId = (s: string) => `s:${s}`
 export const industryId = (s: string, i: string) => `i:${s}/${i}`
 
+/** The sector, and the industry when zoomed that far, a focus points at; null for none or a malformed id. */
+export function parseFocus(focus: Focus): { sector: string, industry: string | null } | null {
+  if (focus?.startsWith('s:') && focus.length > 2)
+    return { sector: focus.slice(2), industry: null }
+  if (focus?.startsWith('i:')) {
+    // Industry names may contain '/' ("Electronics/Appliances"); sector names don't.
+    const body = focus.slice(2)
+    const cut = body.indexOf('/')
+    if (cut > 0 && cut < body.length - 1)
+      return { sector: body.slice(0, cut), industry: body.slice(cut + 1) }
+  }
+  return null
+}
+
+/** One level up: industry → its sector → the whole market. */
+export function parentFocus(focus: Focus): Focus {
+  const p = parseFocus(focus)
+  return p?.industry ? sectorId(p.sector) : null
+}
+
 export function buildTree(stocks: Stock[]): Datum {
   const sectors = new Map<string, Map<string, Stock[]>>()
   for (const s of stocks) {

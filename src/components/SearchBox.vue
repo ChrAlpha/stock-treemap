@@ -2,12 +2,15 @@
 import type { Stock } from '~shared/snapshot'
 import { onKeyStroke } from '@vueuse/core'
 import { computed, ref, watch } from 'vue'
+import { matchQuery } from '../lib/names'
 
 const props = defineProps<{
   /** Everything searchable, in the order to rank ties. */
   stocks: Stock[]
   /** Symbols in the current universe; others are labelled. */
   inUniverse: Set<string>
+  /** What the rest of the market is called here (全市场, 全部港股…). */
+  allLabel: string
 }>()
 
 const emit = defineEmits<{ pick: [stock: Stock] }>()
@@ -24,9 +27,10 @@ const results = computed(() => {
   const starts: Stock[] = []
   const names: Stock[] = []
   for (const s of props.stocks) {
-    if (s.symbol.startsWith(q))
+    const hit = matchQuery(s, q)
+    if (hit === 'symbol')
       starts.push(s)
-    else if (q.length >= 2 && s.name.toUpperCase().includes(q))
+    else if (hit === 'name')
       names.push(s)
   }
   // Exact ticker, then what's on the current map, then by size; name matches after tickers.
@@ -113,9 +117,9 @@ onKeyStroke('/', (e) => {
         @mousedown.prevent="pick(s)"
         @mouseenter="cursor = i"
       >
-        <span class="w-14 shrink-0 font-650 [font-stretch:90%]">{{ s.symbol }}</span>
+        <span class="w-14 shrink-0 truncate font-650 [font-stretch:90%]">{{ s.symbol }}</span>
         <span class="min-w-0 flex-1 truncate text-[12px] text-ink-2">{{ s.name }}</span>
-        <span v-if="!inUniverse.has(s.symbol)" class="shrink-0 text-[10.5px] text-ink-3">全市场</span>
+        <span v-if="!inUniverse.has(s.symbol)" class="shrink-0 text-[10.5px] text-ink-3">{{ allLabel }}</span>
       </li>
     </ul>
   </div>

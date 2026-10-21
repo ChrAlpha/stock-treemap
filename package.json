@@ -6,8 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
+    "build:server": "pnpm build && vite build -c vite.server.config.ts",
     "preview": "pnpm build && vite preview",
     "deploy": "pnpm build && wrangler deploy",
+    "start": "node dist/server/index.mjs",
     "typecheck": "vue-tsc -b",
     "cf-typegen": "wrangler types",
     "test": "vitest run"

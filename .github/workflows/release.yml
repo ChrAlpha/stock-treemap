@@ -1,0 +1,82 @@
+name: Release
+
+# Publishing a GitHub release ships it to each target this repository is set up for.
+# Run it by hand to ship a branch or tag.
+#
+# Cloudflare Workers: runs when the CLOUDFLARE_ACCOUNT_ID variable is set.
+#   secret   CLOUDFLARE_API_TOKEN   Workers Editor on this Worker + Workers Routes Write on the domain's zone
+#   variable CLOUDFLARE_ACCOUNT_ID
+#   variable CUSTOM_DOMAIN          e.g. stock.example.com; unset deploys to workers.dev only
+#
+# Self-hosted image: always, as ghcr.io/<owner>/<repo> tagged with the version
+# (plus `latest` for stable releases), for linux/amd64 and linux/arm64.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  workers:
+    if: vars.CLOUDFLARE_ACCOUNT_ID != ''
+    runs-on: ubuntu-latest
+    # One deploy at a time; a newer release waits instead of cancelling an upload midway.
+    concurrency:
+      group: workers-deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - name: Build
+        run: |
+          [ -n "$CUSTOM_DOMAIN" ] || echo "::warning::CUSTOM_DOMAIN is not set; this deploy turns workers.dev back on."
+          pnpm build
+        env:
+          CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN }}
+      # The token is only exposed to this step, not to dependency install scripts.
+      - name: Deploy
+        run: pnpm exec wrangler deploy --tag "$TAG" --message "$TAG ($(git rev-parse --short HEAD))"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          TAG: ${{ github.event.release.tag_name || github.ref_name }}
+
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=branch
+            type=sha
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -23,7 +23,13 @@ const toNumber = (s: unknown) => {
   return Number.isFinite(n) ? n : null
 }
 
-export async function fetchNasdaqQuotes(): Promise<{ asOf: string | null, rows: QuoteRow[] }> {
+export interface BackupQuotes {
+  /** Trading day the table is from, YYYY-MM-DD. */
+  asOf: string | null
+  rows: QuoteRow[]
+}
+
+export async function fetchNasdaqQuotes(): Promise<BackupQuotes> {
   const res = await fetch(URL_, {
     headers: {
       // The endpoint rejects requests without a browser-like UA.

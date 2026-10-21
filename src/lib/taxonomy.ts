@@ -1,6 +1,5 @@
-// Chinese names for TradingView's sector / industry taxonomy (plus Nasdaq's
-// sectors, used when the backup source builds a snapshot from scratch).
-// Unknown keys fall back to the English original.
+// Chinese names for TradingView's sector / industry taxonomy, which every
+// market's reference data uses. Unknown keys fall back to the English original.
 
 const SECTORS: Record<string, string> = {
   'Commercial Services': '商业服务',
@@ -24,16 +23,6 @@ const SECTORS: Record<string, string> = {
   'Technology Services': '技术服务',
   'Transportation': '交通运输',
   'Utilities': '公用事业',
-  // Nasdaq
-  'Basic Materials': '基础材料',
-  'Consumer Discretionary': '可选消费',
-  'Consumer Staples': '必需消费',
-  'Energy': '能源',
-  'Health Care': '医疗保健',
-  'Industrials': '工业',
-  'Real Estate': '房地产',
-  'Technology': '科技',
-  'Telecommunications': '电信',
 }
 
 const INDUSTRIES: Record<string, string> = {

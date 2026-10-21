@@ -1,4 +1,4 @@
-import type { Period, Universe } from '~shared/snapshot'
+import type { Period } from '~shared/snapshot'
 
 export const PERIOD_LABEL: Record<Period, string> = {
   d1: '今日',
@@ -20,18 +20,4 @@ export const PERIOD_SHORT: Record<Period, string> = {
   m3: '3月',
   ytd: '今年',
   y1: '1年',
-}
-
-export const UNIVERSE_LABEL: Record<Universe, string> = {
-  sp500: '标普 500',
-  ndx: '纳指 100',
-  dji: '道指 30',
-  all: '全市场',
-}
-
-/** Index quote that stands for each universe. */
-export const UNIVERSE_INDEX: Partial<Record<Universe, string>> = {
-  sp500: 'SPX',
-  ndx: 'NDX',
-  dji: 'DJI',
 }

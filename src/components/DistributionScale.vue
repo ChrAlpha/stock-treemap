@@ -15,6 +15,8 @@ const props = defineProps<{
   stocks: Stock[]
   period: Period
   scale: Scale
+  /** Market cap currency. */
+  currency: string
 }>()
 
 const range = defineModel<Range | null>('range', { default: null })
@@ -103,7 +105,7 @@ watch(active, (i) => {
 })
 
 // Selections don't survive a change of what's being measured.
-watch(() => [props.period, props.scale.domain], () => {
+watch([() => props.period, () => props.scale.domain], () => {
   locked.value = null
   hovered.value = null
 })
@@ -176,7 +178,7 @@ function toggle(i: number) {
     <p class="tnum mb-[18px] min-h-[18px] text-[12px] text-ink-2" aria-live="polite">
       <template v-if="readout">
         <span class="font-600 text-ink">{{ readout.label }}</span>
-        <span> · {{ count(readout.count) }} 只 · 市值 {{ money(readout.cap) }}</span>
+        <span> · {{ count(readout.count) }} 只 · 市值 {{ money(readout.cap) }} {{ currency }}</span>
         <span v-if="locked != null && hovered == null" class="text-ink-3"> · 再次点击取消</span>
       </template>
       <template v-else>

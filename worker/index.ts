@@ -1,8 +1,11 @@
-import { marketClock } from '../shared/market'
+import type { MarketId } from '../shared/markets'
+import { marketClock } from '../shared/clock'
+import { isMarketId, MARKETS } from '../shared/markets'
 import { loadMeta, loadQuotes, peek } from './store'
 
 // No cron, no background polling: upstream is touched only when a request
-// arrives and the stored data has expired.
+// arrives and the stored data has expired. Every market has its own paths,
+// cache entries and KV keys, so opening one market refreshes that market only.
 //
 // Workers Caching (wrangler.jsonc → cache.enabled) sits in front of this
 // handler. Repeat requests are answered from Cloudflare's tiered cache without
@@ -35,14 +38,15 @@ function headersFor(expiresAt: number, policy: CachePolicy, stale?: string): Rec
   }
 }
 
-function respond(request: Request, body: BodyInit | null, etag: string, headers: Record<string, string>) {
+function respond(request: Request, body: ReadableStream | string, etag: string, headers: Record<string, string>) {
   const all = { 'content-type': 'application/json; charset=utf-8', etag, ...headers }
-  if (request.headers.get('if-none-match')?.split(/\s*,\s*/).includes(etag)) {
+  const notModified = request.headers.get('if-none-match')?.split(/\s*,\s*/).includes(etag) ?? false
+  if (notModified || request.method === 'HEAD') {
     if (body instanceof ReadableStream)
-      body.cancel()
-    return new Response(null, { status: 304, headers: all })
+      void body.cancel()
+    return new Response(null, { status: notModified ? 304 : 200, headers: all })
   }
-  return new Response(request.method === 'HEAD' ? null : body, { headers: all })
+  return new Response(body, { headers: all })
 }
 
 function problem(status: number, error: string, message: string, maxAge = 3600) {
@@ -52,21 +56,23 @@ function problem(status: number, error: string, message: string, maxAge = 3600) 
   })
 }
 
-function dataHeaders(info: { fetchedAt: number, expiresAt: number, source: string }, stale?: string): Record<string, string> {
+/** Diagnostics for whoever is debugging a response; the page itself reads the body. */
+function dataHeaders(info: { fetchedAt: number, expiresAt: number, source?: string }, stale?: string): Record<string, string> {
   const h: Record<string, string> = {
     'x-data-fetched-at': new Date(info.fetchedAt).toISOString(),
     'x-data-expires-at': new Date(info.expiresAt).toISOString(),
-    'x-data-source': info.source,
   }
+  if (info.source)
+    h['x-data-source'] = info.source
   if (stale)
     h['x-data-stale'] = stale.slice(0, 200)
   return h
 }
 
-async function quotes(request: Request, env: Env) {
+async function quotes(request: Request, env: Env, market: MarketId) {
   let loaded
   try {
-    loaded = await loadQuotes(env.STORE)
+    loaded = await loadQuotes(env.STORE, market)
   }
   catch {
     return problem(503, 'unavailable', '行情源暂时不可用，稍后重试', 15)
@@ -78,10 +84,10 @@ async function quotes(request: Request, env: Env) {
   })
 }
 
-async function meta(request: Request, env: Env) {
+async function meta(request: Request, env: Env, market: MarketId) {
   let loaded
   try {
-    loaded = await loadMeta(env.STORE)
+    loaded = await loadMeta(env.STORE, market)
   }
   catch {
     return problem(503, 'unavailable', '基础数据暂时不可用，稍后重试', 15)
@@ -89,15 +95,16 @@ async function meta(request: Request, env: Env) {
   const { body, info, stale } = loaded
   return respond(request, body, `"m${info.updatedAt}"`, {
     ...headersFor(info.expiresAt, META_POLICY, stale),
-    'x-data-fetched-at': new Date(info.updatedAt).toISOString(),
+    ...dataHeaders({ fetchedAt: info.updatedAt, expiresAt: info.expiresAt }, stale),
   })
 }
 
-async function status(env: Env) {
-  const { quotes: q, meta: m } = await peek(env.STORE)
+async function status(env: Env, market: MarketId) {
+  const { quotes: q, meta: m } = await peek(env.STORE, market)
   const now = Date.now()
   return new Response(JSON.stringify({
-    phase: marketClock(new Date(now)).phase,
+    market,
+    phase: marketClock(MARKETS[market], new Date(now)).phase,
     quotes: q && { ...q, ageSeconds: Math.round((now - q.fetchedAt) / 1000), fresh: now < q.expiresAt },
     meta: m && { ...m, ageSeconds: Math.round((now - m.updatedAt) / 1000), fresh: now < m.expiresAt },
   }), {
@@ -109,37 +116,24 @@ async function status(env: Env) {
   })
 }
 
-/** Only known parameters with known values reach the handlers, so the cache key space stays small. */
-function params(url: URL, allowed: Record<string, readonly string[]>): Record<string, string> | Response {
-  const out: Record<string, string> = {}
-  for (const [k, v] of url.searchParams) {
-    const values = allowed[k]
-    if (!values)
-      return problem(400, 'bad_request', `不支持的参数 ${k}`)
-    if (!values.includes(v))
-      return problem(400, 'bad_request', `${k} 只能是 ${values.join(' | ')}`)
-    out[k] = v
-  }
-  return out
-}
+const ROUTE = /^\/api\/([a-z]{2})\/(quotes|meta|status)$/
 
 async function handle(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url)
   if (request.method !== 'GET' && request.method !== 'HEAD')
     return problem(405, 'method_not_allowed', '只支持 GET')
 
-  const path = url.pathname.replace(/\/$/, '')
-  switch (path) {
-    case '/api/quotes':
-    case '/api/meta':
-    case '/api/status': {
-      const p = params(url, {})
-      if (p instanceof Response)
-        return p
-      return path === '/api/quotes' ? quotes(request, env) : path === '/api/meta' ? meta(request, env) : status(env)
-    }
-    default:
-      return problem(404, 'not_found', '没有这个接口')
+  const match = url.pathname.replace(/\/$/, '').match(ROUTE)
+  const market = match?.[1]
+  if (!match || !isMarketId(market))
+    return problem(404, 'not_found', '没有这个接口')
+  // One URL per resource keeps the cache key space small: random query strings can't bust it.
+  if (url.search)
+    return problem(400, 'bad_request', '不接受查询参数')
+  switch (match[2]) {
+    case 'quotes': return quotes(request, env, market)
+    case 'meta': return meta(request, env, market)
+    default: return status(env, market)
   }
 }
 

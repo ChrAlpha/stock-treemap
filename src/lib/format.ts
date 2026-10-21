@@ -26,7 +26,7 @@ export function money(v: number) {
   if (!v)
     return '—'
   if (v >= 1e12)
-    return `${(v / 1e12).toFixed(v >= 1e13 ? 1 : 2)} 万亿`
+    return `${(v / 1e12).toLocaleString('en-US', { maximumFractionDigits: v >= 1e13 ? 1 : 2, minimumFractionDigits: v >= 1e13 ? 1 : 2 })} 万亿`
   if (v >= 1e8)
     return `${(v / 1e8).toFixed(v >= 1e10 ? 0 : 1)} 亿`
   if (v >= 1e4)
@@ -38,13 +38,31 @@ export function count(n: number) {
   return n.toLocaleString('en-US')
 }
 
-const etTime = new Intl.DateTimeFormat('en-GB', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
-const bjTime = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
-const etDay = new Intl.DateTimeFormat('zh-CN', { timeZone: 'America/New_York', month: 'numeric', day: 'numeric' })
+const timeFmts = new Map<string, Intl.DateTimeFormat>()
+const dayFmts = new Map<string, Intl.DateTimeFormat>()
 
-export const timeET = (t: number) => etTime.format(t)
-export const timeBJ = (t: number) => bjTime.format(t)
-export const dayET = (t: number) => etDay.format(t)
+/** 09:30 in `tz`. */
+export function timeIn(tz: string, t: number) {
+  let f = timeFmts.get(tz)
+  if (!f)
+    timeFmts.set(tz, (f = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })))
+  return f.format(t)
+}
+
+/** 10月20日 in `tz`. */
+export function dayIn(tz: string, t: number) {
+  let f = dayFmts.get(tz)
+  if (!f)
+    dayFmts.set(tz, (f = new Intl.DateTimeFormat('zh-CN', { timeZone: tz, month: 'numeric', day: 'numeric' })))
+  return f.format(t)
+}
+
+export const BEIJING = 'Asia/Shanghai'
+
+/** Whether two zones currently read the same wall clock. */
+export function sameClock(a: string, b: string, t: number) {
+  return timeIn(a, t) === timeIn(b, t) && dayIn(a, t) === dayIn(b, t)
+}
 
 export function duration(minutes: number) {
   if (minutes < 60)

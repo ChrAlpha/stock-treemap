@@ -1,9 +1,45 @@
 import type { IndexQuote, Period, QuoteRow } from '../shared/snapshot'
+import type { Source } from './sources'
 import { PERIODS } from '../shared/snapshot'
 
 // TradingView's screener backend. Undocumented; anonymous POST.
 const SCAN = 'https://scanner.tradingview.com'
 const TIMEOUT = 12_000
+
+// ── Politeness ──────────────────────────────────────────────────
+// Every market shares one upstream, so it's throttled as one: a few requests
+// at a time per isolate, and when it says slow down (429), every market in
+// this isolate stops asking for a while and serves what it has.
+
+const MAX_CONCURRENT = 4
+const DEFAULT_PAUSE = 2 * 60_000
+const MAX_PAUSE = 15 * 60_000
+
+let active = 0
+const waiting: (() => void)[] = []
+let pausedUntil = 0
+
+async function acquire() {
+  while (active >= MAX_CONCURRENT)
+    await new Promise<void>(resolve => waiting.push(resolve))
+  active++
+}
+
+function release() {
+  active--
+  waiting.shift()?.()
+}
+
+function pauseFor(res: Response) {
+  const seconds = Number(res.headers.get('retry-after'))
+  const ms = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : DEFAULT_PAUSE
+  pausedUntil = Math.max(pausedUntil, Date.now() + Math.min(ms, MAX_PAUSE))
+}
+
+/** For tests. */
+export function resetThrottle() {
+  pausedUntil = 0
+}
 
 const PERIOD_COLUMNS: Record<Period, string> = {
   d1: 'change',
@@ -16,33 +52,7 @@ const PERIOD_COLUMNS: Record<Period, string> = {
   y1: 'Perf.Y',
 }
 
-// US-listed common stock and listed ADRs above $1B, one row per company.
-const UNIVERSE = {
-  filter: [
-    { left: 'market_cap_basic', operation: 'greater', right: 1e9 },
-    { left: 'exchange', operation: 'in_range', right: ['NASDAQ', 'NYSE', 'AMEX'] },
-    { left: 'type', operation: 'in_range', right: ['stock', 'dr'] },
-    { left: 'subtype', operation: 'nequal', right: 'preferred' },
-  ],
-  // Primary listings only (drops GOOGL next to GOOG), but keep foreign companies whose primary listing is abroad.
-  filter2: {
-    operator: 'and',
-    operands: [{
-      operation: {
-        operator: 'or',
-        operands: [
-          { expression: { left: 'is_primary', operation: 'equal', right: true } },
-          { expression: { left: 'type', operation: 'equal', right: 'dr' } },
-          // Foreign companies cross-listed as common stock (RY, AZN, TRI).
-          { expression: { left: 'country', operation: 'nequal', right: 'United States' } },
-        ],
-      },
-    }],
-  },
-  options: { lang: 'en' },
-  sort: { sortBy: 'market_cap_basic', sortOrder: 'desc' },
-  range: [0, 4000],
-}
+const EXTENDED = new Set<Period>(['pre', 'post'])
 
 interface ScanResponse {
   totalCount: number
@@ -50,23 +60,37 @@ interface ScanResponse {
   error?: string
 }
 
-async function scan(market: string, body: unknown): Promise<ScanResponse> {
-  const res = await fetch(`${SCAN}/${market}/scan`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'accept': 'application/json' },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(TIMEOUT),
-  })
-  if (!res.ok)
-    throw new Error(`TradingView ${market} scan: HTTP ${res.status}`)
-  const json = await res.json<ScanResponse>()
-  if (json.error || !Array.isArray(json.data))
-    throw new Error(`TradingView ${market} scan: ${json.error ?? 'no data'}`)
-  return json
+async function scan(scanner: string, body: unknown): Promise<ScanResponse> {
+  await acquire()
+  try {
+    // Checked after the wait too: a 429 may have landed while this request was queued.
+    if (Date.now() < pausedUntil)
+      throw new Error(`TradingView asked us to slow down; paused until ${new Date(pausedUntil).toISOString()}`)
+    const res = await fetch(`${SCAN}/${scanner}/scan`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'accept': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(TIMEOUT),
+    })
+    if (res.status === 429)
+      pauseFor(res)
+    if (!res.ok) {
+      await res.body?.cancel()
+      throw new Error(`TradingView ${scanner} scan: HTTP ${res.status}`)
+    }
+    const json = await res.json<ScanResponse>()
+    if (json.error || !Array.isArray(json.data))
+      throw new Error(`TradingView ${scanner} scan: ${json.error ?? 'no data'}`)
+    return json
+  }
+  finally {
+    release()
+  }
 }
 
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
-const str = (v: unknown, fallback = '') => (typeof v === 'string' && v ? v : fallback)
+// Some names come padded with ideographic spaces.
+const str = (v: unknown, fallback = '') => (typeof v === 'string' && v.trim() ? v.trim() : fallback)
 const round2 = (v: unknown) => {
   const n = num(v)
   return n == null ? null : Math.round(n * 100) / 100
@@ -82,6 +106,17 @@ function delayFromMode(mode: unknown) {
   return Number.isFinite(seconds) ? Math.round(seconds / 60) : 15
 }
 
+function universe(src: Source, columns: string[], range: number) {
+  return {
+    filter: src.filter,
+    ...(src.filter2 ? { filter2: src.filter2 } : {}),
+    options: { lang: src.lang },
+    sort: { sortBy: 'market_cap_basic', sortOrder: 'desc' },
+    columns,
+    range: [0, range],
+  }
+}
+
 export interface RefRow {
   symbol: string
   exchange: string
@@ -91,22 +126,29 @@ export interface RefRow {
 }
 
 /** Reference columns only: strings that change rarely. */
-export async function fetchReference(): Promise<{ rows: RefRow[], delay: number }> {
+export async function fetchReference(src: Source): Promise<{ rows: RefRow[], delay: number }> {
+  // A little deeper than the quotes, so a stock that climbs past the cutoff still has a name.
+  const depth = src.limit + Math.ceil(src.limit / 5)
   const [json, modes] = await Promise.all([
-    scan('america', { ...UNIVERSE, columns: ['name', 'description', 'exchange', 'sector', 'industry'] }),
+    scan(src.scanner, universe(src, ['name', 'description', 'exchange', 'sector', 'industry'], depth)),
     // The quote delay is the same across listings; a sample is enough and keeps it off every row.
-    scan('america', { ...UNIVERSE, columns: ['update_mode'], range: [0, 20] }),
+    scan(src.scanner, universe(src, ['update_mode'], 20)),
   ])
-  const rows = json.data!.map(({ s, d: [name, description, exchange, sector, industry] }) => {
+  const seen = new Set<string>()
+  const rows: RefRow[] = []
+  for (const { s, d: [name, description, exchange, sector, industry] } of json.data!) {
     const symbol = str(name, symbolOf(s))
-    return {
+    if (seen.has(symbol))
+      continue
+    seen.add(symbol)
+    rows.push({
       symbol,
       exchange: str(exchange, s.split(':')[0]),
       name: str(description, symbol),
       sector: str(sector, 'Miscellaneous'),
       industry: str(industry, 'Miscellaneous'),
-    }
-  })
+    })
+  }
   const counts = new Map<number, number>()
   for (const { d } of modes.data!) {
     const delay = delayFromMode(d[0])
@@ -116,63 +158,74 @@ export async function fetchReference(): Promise<{ rows: RefRow[], delay: number 
   return { rows, delay }
 }
 
-const QUOTE_COLUMNS = ['close', 'market_cap_basic', 'Value.Traded', ...PERIODS.map(p => PERIOD_COLUMNS[p])]
-
 /**
  * Numbers only — this runs on every refresh, so it is the CPU hot path on the
  * free plan (~5ms for ~2.5k rows). Keep the per-row work minimal.
  */
-export async function fetchQuotes(): Promise<QuoteRow[]> {
-  const json = await scan('america', { ...UNIVERSE, columns: QUOTE_COLUMNS })
+export async function fetchQuotes(src: Source): Promise<QuoteRow[]> {
+  const periods = PERIODS.filter(p => src.extended || !EXTENDED.has(p))
+  // Column index in the response for each period, or -1 where it isn't requested.
+  const at = PERIODS.map(p => periods.includes(p) ? 3 + periods.indexOf(p) : -1)
+  const json = await scan(src.scanner, universe(src, ['close', 'market_cap_basic', 'Value.Traded', ...periods.map(p => PERIOD_COLUMNS[p])], src.limit))
+  const seen = new Set<string>()
   const rows: QuoteRow[] = []
   for (const { s, d } of json.data!) {
     const price = num(d[0])
     const cap = num(d[1])
-    if (price == null || cap == null)
+    const symbol = symbolOf(s)
+    if (price == null || cap == null || seen.has(symbol))
       continue
-    rows.push([
-      symbolOf(s),
+    seen.add(symbol)
+    const row: QuoteRow = [
+      symbol,
       Math.round(price * 100) / 100,
       Math.round(cap / 1e4) * 1e4,
       Math.round((num(d[2]) ?? 0) / 1e4) * 1e4,
-      round2(d[3]),
-      round2(d[4]),
-      round2(d[5]),
-      round2(d[6]),
-      round2(d[7]),
-      round2(d[8]),
-      round2(d[9]),
-      round2(d[10]),
-    ])
+    ]
+    for (const i of at)
+      row.push(i < 0 ? null : round2(d[i]))
+    rows.push(row)
   }
   return rows
 }
 
-const INDICES: { ticker: string, symbol: string, name: string }[] = [
-  { ticker: 'SP:SPX', symbol: 'SPX', name: '标普 500' },
-  { ticker: 'NASDAQ:NDX', symbol: 'NDX', name: '纳指 100' },
-  { ticker: 'DJ:DJI', symbol: 'DJI', name: '道琼斯' },
-  { ticker: 'TVC:RUT', symbol: 'RUT', name: '罗素 2000' },
-  { ticker: 'TVC:VIX', symbol: 'VIX', name: 'VIX' },
-]
+export interface SessionState {
+  /** The exchange says it's in its regular session. */
+  live: boolean
+  /** Trading day the latest bar belongs to, YYYY-MM-DD. */
+  tradeDate: string | null
+}
 
-export async function fetchIndices(): Promise<IndexQuote[]> {
-  const json = await scan('global', {
-    symbols: { tickers: INDICES.map(i => i.ticker) },
-    columns: ['close', ...PERIODS.map(p => PERIOD_COLUMNS[p])],
+/** Index quotes for the market's tabs, plus whether it is trading today. */
+export async function fetchIndices(src: Source): Promise<{ indices: IndexQuote[], session: SessionState | null }> {
+  const probe = src.probe ?? src.indices[0]?.ticker
+  const tickers = src.indices.map(i => i.ticker)
+  if (probe && !tickers.includes(probe))
+    tickers.push(probe)
+  if (!tickers.length)
+    return { indices: [], session: null }
+  const json = await scan(src.indexScanner, {
+    symbols: { tickers },
+    columns: ['close', 'current_session', 'time_business_day', ...PERIODS.map(p => PERIOD_COLUMNS[p])],
   })
   const byTicker = new Map(json.data!.map(r => [r.s, r.d]))
-  return INDICES.flatMap(({ ticker, symbol, name }) => {
+  const indices = src.indices.flatMap(({ ticker, symbol }) => {
     const d = byTicker.get(ticker)
     const price = num(d?.[0])
     if (!d || price == null)
       return []
     const change: IndexQuote['change'] = {}
     PERIODS.forEach((p, i) => {
-      change[p] = round2(d[1 + i])
+      change[p] = round2(d[3 + i])
     })
-    return [{ symbol, name, price, change }]
+    return [{ symbol, price, change }]
   })
+  const p = probe ? byTicker.get(probe) : undefined
+  const day = num(p?.[2])
+  const session = p
+    ? { live: p[1] === 'market', tradeDate: day == null ? null : new Date(day * 1000).toISOString().slice(0, 10) }
+    : null
+  return { indices, session }
 }
 
 /** Strip share-class suffixes so BRK.A matches the index's BRK.B. */
@@ -192,34 +245,31 @@ export function memberKeys(symbol: string, name?: string) {
   return keys
 }
 
-export interface Membership {
-  sp500: Set<string>
-  ndx: Set<string>
-  dji: Set<string>
-}
+/** Ids of the market's universes a listing belongs to, given its reference-data symbol and name. */
+export type Membership = (symbol: string, name: string) => string[]
 
-export async function fetchMembership(): Promise<Membership> {
-  const list = async (symbolset: string, min: number) => {
-    const json = await scan('america', {
-      symbols: { symbolset: [symbolset] },
-      options: { lang: 'en' },
+export async function fetchMembership(src: Source): Promise<Membership> {
+  const lists = await Promise.all(Object.entries(src.membership).map(async ([id, { set, min }]) => {
+    const json = await scan(src.scanner, {
+      symbols: { symbolset: [set] },
+      // Same language as the reference data, so name keys line up.
+      options: { lang: src.lang },
       columns: ['name', 'description', 'is_primary'],
       range: [0, 1000],
     })
-    // Expected sizes: 503 / 101 / 30 listings; anything well short means a truncated response.
     if (json.data!.length < min)
-      throw new Error(`${symbolset}: only ${json.data!.length} members`)
+      throw new Error(`${set}: only ${json.data!.length} members`)
     const keys = json.data!.flatMap(({ s, d: [name, description, primary] }) => {
       const symbol = str(name, symbolOf(s))
       // Name matching is only for secondary share classes; distinct companies can share a name ("First Bancorp").
       return primary === false && typeof description === 'string' ? memberKeys(symbol, description) : memberKeys(symbol)
     })
-    return new Set(keys)
+    return [id, new Set(keys)] as const
+  }))
+  if (!lists.length)
+    return () => []
+  return (symbol, name) => {
+    const keys = memberKeys(symbol, name)
+    return lists.filter(([, set]) => keys.some(k => set.has(k))).map(([id]) => id)
   }
-  const [sp500, ndx, dji] = await Promise.all([
-    list('SYML:SP;SPX', 480),
-    list('SYML:NASDAQ;NDX', 95),
-    list('SYML:DJ;DJI', 29),
-  ])
-  return { sp500, ndx, dji }
 }

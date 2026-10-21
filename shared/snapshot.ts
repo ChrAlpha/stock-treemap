@@ -1,4 +1,4 @@
-// Wire formats for the public API, shared by the Worker and the web app.
+// Wire formats between the Worker and the web app, one pair per market.
 //
 // Data is split by how often it changes:
 // - meta   — names, taxonomy, index membership; refreshed once per trading day
@@ -6,29 +6,29 @@
 // Rows are positional arrays to keep payloads small; `joinSnapshot` turns a
 // meta + quotes pair into objects.
 
+import type { MarketId, MarketSpec } from './markets'
+
 export const PERIODS = ['d1', 'pre', 'post', 'd5', 'm1', 'm3', 'ytd', 'y1'] as const
 export type Period = typeof PERIODS[number]
-
-export const UNIVERSES = ['sp500', 'ndx', 'dji', 'all'] as const
-export type Universe = typeof UNIVERSES[number]
-
-/** Bit flags for index membership. */
-export const MEMBER = { sp500: 1, ndx: 2, dji: 4 } as const
 
 export type QuoteSource = 'tradingview' | 'nasdaq'
 
 export interface IndexQuote {
+  /** Matches `UniverseSpec.index` / `ExtraQuote.symbol`. */
   symbol: string
-  name: string
   price: number
   change: Partial<Record<Period, number | null>>
 }
 
-/** [symbol, exchange, name, sector index, industry index, membership bits] */
+/**
+ * [symbol, exchange, name, sector index, industry index, membership bits]
+ * Bit i is set when the stock belongs to the market's i-th universe.
+ */
 export type MetaRow = [string, string, string, number, number, number]
 
 export interface WireMeta {
-  v: 1
+  v: 2
+  market: MarketId
   updatedAt: number
   /** Next time the Worker will consider refreshing (epoch ms). */
   expiresAt: number
@@ -46,12 +46,17 @@ export const QUOTE_FIELDS = ['symbol', 'price', 'marketCap', 'valueTraded', ...P
 export type QuoteRow = [string, number, number, number, ...(number | null)[]]
 
 export interface WireQuotes {
-  v: 1
+  v: 2
+  market: MarketId
   source: QuoteSource
   fetchedAt: number
   expiresAt: number
   /** Periods the source filled for a meaningful share of stocks. */
   periods: Period[]
+  /** Trading day the data belongs to, YYYY-MM-DD, when the source says. */
+  tradeDate: string | null
+  /** The calendar says the market is open, but the source says it hasn't traded today. */
+  holiday: boolean
   fields: typeof QUOTE_FIELDS
   rows: QuoteRow[]
   indices: IndexQuote[]
@@ -71,27 +76,26 @@ export interface Stock {
 }
 
 export interface Snapshot {
+  market: MarketId
   source: QuoteSource
   fetchedAt: number
   expiresAt: number
   delay: number
   periods: Period[]
+  tradeDate: string | null
+  holiday: boolean
   stocks: Stock[]
   indices: IndexQuote[]
-  /** Quote rows with no reference data yet (e.g. a listing newer than meta). */
-  unmatched: number
 }
 
 export function joinSnapshot(meta: WireMeta, quotes: WireQuotes): Snapshot {
   const ref = new Map(meta.rows.map(r => [r[0], r]))
   const stocks: Stock[] = []
-  let unmatched = 0
   for (const q of quotes.rows) {
+    // A listing newer than the reference data waits for the next meta refresh.
     const m = ref.get(q[0])
-    if (!m) {
-      unmatched++
+    if (!m)
       continue
-    }
     const change = {} as Record<Period, number | null>
     PERIODS.forEach((p, i) => {
       change[p] = (q[4 + i] as number | null) ?? null
@@ -110,22 +114,36 @@ export function joinSnapshot(meta: WireMeta, quotes: WireQuotes): Snapshot {
     })
   }
   return {
+    market: quotes.market,
     source: quotes.source,
     fetchedAt: quotes.fetchedAt,
     expiresAt: quotes.expiresAt,
     delay: meta.delay,
     periods: quotes.periods,
+    tradeDate: quotes.tradeDate,
+    holiday: quotes.holiday,
     stocks,
     indices: quotes.indices,
-    unmatched,
   }
 }
 
-export function universeOf(stocks: Stock[], u: Universe) {
-  if (u === 'all')
+/** `MetaRow` membership bits for the universes a stock belongs to, by id. */
+export function memberBits(market: MarketSpec, universes: readonly string[]) {
+  let bits = 0
+  market.universes.forEach((u, i) => {
+    if (universes.includes(u.id))
+      bits |= 1 << i
+  })
+  return bits
+}
+
+/** The stocks in one of the market's universes, read from their membership bits. */
+export function universeOf(stocks: Stock[], market: MarketSpec, id: string) {
+  const i = market.universes.findIndex(u => u.id === id)
+  const u = market.universes[i]
+  if (!u || u.id === 'all')
     return stocks
-  const members = stocks.filter(s => s.members & MEMBER[u])
+  const members = stocks.filter(s => s.members & (1 << i))
   // Membership unavailable: approximate by size rather than return nothing.
-  const fallback = { sp500: 500, ndx: 100, dji: 30 }[u]
-  return members.length ? members : [...stocks].sort((a, b) => b.marketCap - a.marketCap).slice(0, fallback)
+  return members.length || !u.size ? members : [...stocks].sort((a, b) => b.marketCap - a.marketCap).slice(0, u.size)
 }
