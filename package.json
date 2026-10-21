@@ -2,6 +2,7 @@
   "name": "stock-treemap",
   "type": "module",
   "private": true,
+  "license": "MIT",
   "packageManager": "pnpm@11.24.0",
   "scripts": {
     "dev": "vite",
