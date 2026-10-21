@@ -1,0 +1,94 @@
+html,
+body {
+  margin: 0;
+  background: #f1f7f8;
+}
+
+#card {
+  position: relative;
+  width: 1200px;
+  height: 630px;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+#map {
+  position: absolute;
+  inset: 0;
+  width: 1200px;
+  height: 630px;
+}
+
+/* The title is the treemap's largest cell: same margin, radius and gap as the tiles. */
+#title {
+  position: absolute;
+  left: 20px;
+  top: 20px;
+  width: 404px;
+  height: 590px;
+  box-sizing: border-box;
+  padding: 44px 44px 0;
+  border-radius: 3px;
+  background: #fbfdfd;
+  color: #1c232d;
+  font-family: "Mona Sans Variable", "Noto Sans CJK SC", sans-serif;
+}
+
+[data-tile="deep"] #title {
+  background: #e5edef;
+}
+
+[data-tile="ink"] #title {
+  background: #1c232d;
+  color: #f1f7f8;
+}
+
+.mark {
+  display: block;
+  width: 52px;
+  height: 52px;
+}
+
+h1 {
+  margin: 120px 0 0 -6px;
+  font-family: "Noto Sans CJK SC", sans-serif;
+  font-size: 148px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+
+.tagline {
+  margin: 26px 0 0;
+  font-family: "Noto Sans CJK SC", sans-serif;
+  font-size: 40px;
+  font-weight: 400;
+  line-height: 1.2;
+  letter-spacing: 0.06em;
+  color: #4b535c;
+}
+
+[data-tile="ink"] .tagline {
+  color: rgba(241, 247, 248, 0.78);
+}
+
+.legend {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 44px;
+  font-family: "Noto Sans CJK SC", sans-serif;
+  font-size: 18px;
+  color: #4b535c;
+}
+
+.legend .bar {
+  display: flex;
+  gap: 2px;
+}
+
+.legend i {
+  width: 22px;
+  height: 12px;
+  border-radius: 2px;
+}

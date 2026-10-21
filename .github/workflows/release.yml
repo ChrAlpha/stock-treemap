@@ -7,6 +7,7 @@ name: Release
 #   secret   CLOUDFLARE_API_TOKEN   Workers Editor on this Worker + Workers Routes Write on the domain's zone
 #   variable CLOUDFLARE_ACCOUNT_ID
 #   variable CUSTOM_DOMAIN          e.g. stock.example.com; unset deploys to workers.dev only
+#   variable SITE_URL               optional; the share card's origin when there is no CUSTOM_DOMAIN
 #
 # Self-hosted image: always, as ghcr.io/<owner>/<repo> tagged with the version
 # (plus `latest` for stable releases), for linux/amd64 and linux/arm64.
@@ -41,6 +42,7 @@ jobs:
           pnpm build
         env:
           CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN }}
+          SITE_URL: ${{ vars.SITE_URL }}
       # The token is only exposed to this step, not to dependency install scripts.
       - name: Deploy
         run: pnpm exec wrangler deploy --tag "$TAG" --message "$TAG ($(git rev-parse --short HEAD))"

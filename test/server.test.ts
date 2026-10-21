@@ -1,5 +1,5 @@
 import type { AddressInfo } from 'node:net'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer, request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { parseHeaders, staticAssets } from '../server/assets'
 import { listener } from '../server/http'
 import { fileKv } from '../server/kv'
+import { siteOrigin, withShareOrigin } from '../shared/site'
 import worker from '../worker/index'
 import { load } from '../worker/store'
 
@@ -99,11 +100,40 @@ describe('static assets', () => {
     expect(await (await get('/', { method: 'HEAD' })).text()).toBe('')
   })
 
+  it('points share-card images at the configured origin', async () => {
+    const dir = tmp()
+    writeFileSync(join(dir, 'index.html'), '<meta property="og:image" content="/og.png" />')
+    const page = await staticAssets(dir, { origin: 'https://stock.example.com' }).fetch(new Request('http://localhost/'))
+    expect(await page.text()).toBe('<meta property="og:image" content="https://stock.example.com/og.png" />')
+  })
+
   it('parses wildcards and placeholders', () => {
     const [rule] = parseHeaders('/posts/:slug/*\n  X-Test: 1')
     expect(rule!.pattern.test('/posts/hello/img.png')).toBe(true)
     expect(rule!.pattern.test('/posts/a/b')).toBe(true)
     expect(rule!.pattern.test('/other')).toBe(false)
+  })
+})
+
+describe('share card origin', () => {
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8')
+  const images = (h: string) => [...h.matchAll(/<meta (?:property|name)="(?:og|twitter):image" content="([^"]*)"/g)].map(m => m[1])
+
+  it('rewrites every image tag in the page template', () => {
+    expect(images(html)).toEqual(['/og.png'])
+    expect(images(withShareOrigin(html, 'https://stock.example.com'))).toEqual(['https://stock.example.com/og.png'])
+  })
+
+  it('replaces an origin set at build time', () => {
+    const built = withShareOrigin(html, 'https://a.example.com')
+    expect(images(withShareOrigin(built, 'http://127.0.0.1:3000'))).toEqual(['http://127.0.0.1:3000/og.png'])
+  })
+
+  it('takes the origin of a full http(s) URL and rejects anything else', () => {
+    expect(siteOrigin('https://stock.example.com/some/path?q=1')).toBe('https://stock.example.com')
+    expect(siteOrigin('http://127.0.0.1:3000')).toBe('http://127.0.0.1:3000')
+    expect(() => siteOrigin('stock.example.com')).toThrow('SITE_URL must be a full URL')
+    expect(() => siteOrigin('ftp://stock.example.com')).toThrow('SITE_URL must be a full URL')
   })
 })
 

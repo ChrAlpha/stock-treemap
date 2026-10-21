@@ -1,6 +1,7 @@
 import { createServer } from 'node:http'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { siteOrigin } from '../shared/site'
 import worker from '../worker/index'
 import { staticAssets } from './assets'
 import { listener } from './http'
@@ -16,12 +17,14 @@ import { fileKv } from './kv'
 const port = Number(process.env.PORT || 3000)
 const host = process.env.HOST || '127.0.0.1'
 const dataDir = process.env.DATA_DIR || 'data'
+// Public URL for the share card's image link; overrides one set at build time.
+const origin = process.env.SITE_URL ? siteOrigin(process.env.SITE_URL) : undefined
 
 const kv = fileKv(dataDir)
 // Only the members the handler touches are provided: getWithMetadata/put and fetch.
 const env = {
   STORE: kv,
-  ASSETS: staticAssets(join(dirname(fileURLToPath(import.meta.url)), '../client')),
+  ASSETS: staticAssets(join(dirname(fileURLToPath(import.meta.url)), '../client'), { origin }),
 } as unknown as Env
 
 // No `request.cf` off Cloudflare; the handler doesn't read it.

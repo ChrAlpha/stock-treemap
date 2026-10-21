@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { extname, join, relative, sep } from 'node:path'
+import { withShareOrigin } from '../shared/site'
 
 // Serves the client build the way Workers Static Assets does for this project:
 // `_headers` rules, single-page-application fallback and ETag revalidation.
@@ -79,7 +80,8 @@ function* walk(dir: string): Generator<string> {
   }
 }
 
-export function staticAssets(root: string) {
+/** `origin`: the site's public origin, for share-card links in the HTML. */
+export function staticAssets(root: string, { origin }: { origin?: string } = {}) {
   if (!existsSync(join(root, 'index.html')))
     throw new Error(`No client build at ${root}; run \`pnpm build\` first`)
   const rulesFile = join(root, '_headers')
@@ -90,7 +92,9 @@ export function staticAssets(root: string) {
     const path = `/${relative(root, file).split(sep).join('/')}`
     if (HIDDEN.has(path))
       continue
-    const body = readFileSync(file)
+    let body = readFileSync(file)
+    if (origin && extname(path) === '.html')
+      body = Buffer.from(withShareOrigin(body.toString('utf8'), origin))
     files.set(path, { body, headers: headersFor(path, body, rules) })
   }
 

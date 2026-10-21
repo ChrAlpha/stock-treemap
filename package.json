@@ -9,6 +9,7 @@
     "build": "vue-tsc -b && vite build",
     "build:server": "pnpm build && vite build -c vite.server.config.ts",
     "preview": "pnpm build && vite preview",
+    "og": "vite scripts/og",
     "deploy": "pnpm build && wrangler deploy",
     "start": "node dist/server/index.mjs",
     "typecheck": "vue-tsc -b",

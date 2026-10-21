@@ -58,6 +58,7 @@ pnpm deploy   # 第一次部署会自动创建 KV namespace，并把 id 写回 w
 ```
 
 - 绑定自定义域名：在环境变量或 `.env.local` 里设置 `CUSTOM_DOMAIN=stock.example.com`（多个用逗号分隔），部署时 Wrangler 会创建 DNS 记录和证书，并关闭 workers.dev。不设置则只部署到 workers.dev。
+- 分享卡片：页面里的预览图链接需要完整域名，X 等平台不认相对地址。构建时取 `SITE_URL`（如 `https://stock.example.com`），没有则取 `CUSTOM_DOMAIN` 的第一个；都不设置时只写相对路径，能不能显示取决于各平台。
 - `cache.enabled` 需要 Wrangler 4.69 或更高版本（当前用的是 4.151）。
 - 两个上游目前只在本地环境调通过，从 Cloudflare 出口发出的请求会不会被拦截，需要部署后再验证。
 
@@ -68,6 +69,7 @@ pnpm deploy   # 第一次部署会自动创建 KV namespace，并把 id 写回 w
 | Secret | `CLOUDFLARE_API_TOKEN` | 该 Worker 的 Workers Editor 权限，加上域名所在 zone 的 Workers Routes Write |
 | Variable | `CLOUDFLARE_ACCOUNT_ID` | 不设置则跳过 Workers 部署 |
 | Variable | `CUSTOM_DOMAIN` | 同上；不设置会部署到 workers.dev |
+| Variable | `SITE_URL` | 可选；只部署到 workers.dev 时用它写分享卡片的域名 |
 
 ### 自部署（Docker / Node）
 
@@ -94,6 +96,7 @@ pnpm start
 | `PORT` | `3000` | 监听端口 |
 | `HOST` | `127.0.0.1`（镜像内为 `0.0.0.0`） | 监听地址 |
 | `DATA_DIR` | `data`（镜像内为 `/data`） | 行情数据的存放目录，重启后不必重新取数 |
+| `SITE_URL` | — | 对外访问的地址，如 `https://stock.example.com`；用于分享卡片的预览图链接，不设置时 X 等平台不显示大图 |
 
 - KV 换成了内存加本地文件，一个数据目录只能由一个进程使用。
 - 前面没有 Cloudflare 的缓存，但过期判断和请求合并都在服务端里，每个市场在每个有效期内仍然最多访问上游一次。
@@ -105,6 +108,7 @@ pnpm start
 - 涨跌色取自国画颜料：朱砂、石绿；色觉友好色板用赭石、花青。色阶在 OKLCH 里插值，饱和度先于明度到位，中等涨跌幅不会发灰
 - 字体用 Mona Sans 可变字体：窄格子自动改用窄体（宽度轴 75%–100%），尽量让代码以更大字号显示
 - 首次加载时颜色从中性灰晕开；切换区间时颜色渐变过渡；放大时整块推近，其他格子顺势移出画面
+- 分享卡片（`public/og.png`）本身也是一张热力图，标题占最大的一格；格子是示意数据，不是实时行情。源文件在 `scripts/og/`，`pnpm og` 打开后按 1200×630 截图即可重新生成
 
 ## 许可
 
