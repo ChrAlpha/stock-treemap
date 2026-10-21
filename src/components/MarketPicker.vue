@@ -9,6 +9,9 @@ import { MARKET_IDS, MARKETS, REGIONS } from '~shared/markets'
 
 // Picking a market is the only thing that loads it. The list itself is
 // computed from each market's trading hours, so opening it fetches nothing.
+//
+// On phones the button sits too far right for the panel to fit beside it, so
+// the root stays static and the panel hangs off the header row in App.vue.
 
 const props = defineProps<{
   /** Source-reported closure for the market on screen. */
@@ -97,7 +100,7 @@ onKeyStroke('Escape', () => {
 </script>
 
 <template>
-  <div ref="root" class="relative">
+  <div ref="root" class="relative max-sm:static">
     <button
       ref="button"
       class="focus-ring -ml-1 flex h-8 items-center gap-1.5 rounded-md px-2 hover:bg-paper-deep/70"

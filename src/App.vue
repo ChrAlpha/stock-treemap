@@ -209,7 +209,7 @@ const sizeOptions = [
 <template>
   <div class="mx-auto flex h-full min-h-[640px] max-w-[1920px] flex-col px-3 sm:px-5">
     <header class="flex flex-wrap items-center gap-x-6 gap-y-2 pt-3 sm:pt-4">
-      <div class="flex shrink-0 items-center gap-2.5">
+      <div class="relative flex shrink-0 items-center gap-2.5">
         <h1 class="m-0 flex items-center gap-2.5" :title="`版图 · ${market.title}热力图`">
           <BrandMark class="h-[22px] w-[22px]" />
           <span class="text-[19px] font-700 tracking-[0.06em]">版图</span>
